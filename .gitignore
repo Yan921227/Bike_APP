@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.venv/
+venv/
+
+# OS / IDE
+.DS_Store
+.vscode/
+.idea/
+
+# 大檔/媒體/二進位（必要時改用 LFS）
+*.so
+*.dylib
+*.dll
+*.exe
+*.bin
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.zip
+*.tar
+*.tar.gz
+
+# Build & cache
+build/
+dist/
+.cache/
