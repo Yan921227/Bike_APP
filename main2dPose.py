@@ -43,6 +43,13 @@ class BikeFIt():
 
     def __init__(self):
         self.start_time = time.time()  # 初始化開始時間
+        # 平滑相關參數
+        # alpha: EMA 權重 (0~1)，數值越大表示更新越快、抖動越明顯；數值越小表示更平滑但延遲增加
+        self.smooth_alpha = 0.5
+        # visibility 閥值，低於此值的點不會用新的偵測值更新（避免噪聲引起飄移）
+        self.visibility_threshold = 0.5
+        # 儲存上一幀平滑後的關鍵點 (list of (x,y) or None)
+        self.smoothed_landmarks = None
         
         # 初始化數據庫連接
         try:
@@ -75,6 +82,45 @@ class BikeFIt():
             [cv2.circle(img, p, 2, (0, 255, 0), -1) for p in mesh_coord]
         return mesh_coord
 
+    def smooth_landmarks(self, mesh_coord, raw_landmarks, alpha=None, vis_thresh=None):
+        """
+        使用簡單的指數移動平均 (EMA) 平滑 2D 關鍵點。
+        mesh_coord: list of (x,y) int - 當前偵測的像素座標
+        raw_landmarks: list of mediapipe Landmark - 用來讀取 visibility
+        alpha: EMA 權重 (若 None 則使用 self.smooth_alpha)
+        vis_thresh: visibility 閥值 (若 None 則使用 self.visibility_threshold)
+        回傳 list of (x,y) int 為平滑後的座標
+        """
+        if alpha is None:
+            alpha = self.smooth_alpha
+        if vis_thresh is None:
+            vis_thresh = self.visibility_threshold
+
+        n = len(mesh_coord)
+        # 初始化
+        if self.smoothed_landmarks is None or len(self.smoothed_landmarks) != n:
+            # 第一次直接設為當前偵測值
+            self.smoothed_landmarks = [tuple(p) for p in mesh_coord]
+            return self.smoothed_landmarks
+
+        new_smoothed = []
+        for i in range(n):
+            cur = mesh_coord[i]
+            prev = self.smoothed_landmarks[i]
+            # 如果 visibility 太低，不用新的偵測值直接保留 prev
+            vis = getattr(raw_landmarks[i], 'visibility', None)
+            if vis is not None and vis < vis_thresh:
+                new_smoothed.append(prev)
+                continue
+
+            # EMA: new = alpha * cur + (1-alpha) * prev
+            sx = int(round(alpha * cur[0] + (1 - alpha) * prev[0]))
+            sy = int(round(alpha * cur[1] + (1 - alpha) * prev[1]))
+            new_smoothed.append((sx, sy))
+
+        self.smoothed_landmarks = new_smoothed
+        return new_smoothed
+
     # 計算角度的公式
     def calculate_angle(self, point1, point2, point3):
         vector_a = (point1[0] - point2[0], point1[1] - point2[1])
@@ -82,17 +128,33 @@ class BikeFIt():
         dot_product = vector_a[0] * vector_b[0] + vector_a[1] * vector_b[1]
         magnitude_a = math.sqrt(vector_a[0] ** 2 + vector_a[1] ** 2)
         magnitude_b = math.sqrt(vector_b[0] ** 2 + vector_b[1] ** 2)
-        angle_radians = math.acos(dot_product / (magnitude_a * magnitude_b))
+        # 數值穩健性：避免除以零或超出 -1~1 範圍導致 math domain error
+        if magnitude_a == 0 or magnitude_b == 0:
+            return 0.0
+        cos_val = dot_product / (magnitude_a * magnitude_b)
+        cos_val = max(-1.0, min(1.0, cos_val))
+        angle_radians = math.acos(cos_val)
         angle_degrees = math.degrees(angle_radians)
         return angle_degrees
 
     # 人體姿態檢測 只擷取單側影像
-    def mpPose(self, cap, side='right'):
+    def mpPose(self, cap, side='right', output_path=None):
         
         with self.mp_pose.Pose(min_detection_confidence=0.5, min_tracking_confidence=0.5) as pose:
             if not cap.isOpened():
                 print("Cannot open camera")
                 exit()
+
+            # 如果要輸出影片，建立 VideoWriter
+            writer = None
+            if output_path is not None:
+                # 嘗試從 capture 取得 fps
+                fps = cap.get(cv2.CAP_PROP_FPS)
+                if fps is None or fps <= 0:
+                    fps = 30.0
+                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                # 我們在後續會把每幀 resize 到 (1080,720)
+                writer = cv2.VideoWriter(output_path, fourcc, fps, (1080, 720))
 
             while True:
                 ret, img = cap.read()
@@ -105,22 +167,26 @@ class BikeFIt():
                 results = pose.process(img2)  # 開始姿勢估計
 
                 if results.pose_landmarks is not None:
+                    # 取得原始像素座標
                     mesh_coord = self.landmarksDetection(img2, results, True)
+                    # 使用 EMA 平滑（會參考到每個 landmark 的 visibility）
+                    smoothed = self.smooth_landmarks(mesh_coord, results.pose_landmarks.landmark)
+                    # 畫出平滑後的點 (紅色)
                     if side == 'right':
-                        [cv2.circle(img, mesh_coord[i], 3, (0, 0, 255), -1) for i in self.rightPoint]
+                        [cv2.circle(img, smoothed[i], 3, (0, 0, 255), -1) for i in self.rightPoint]
                     else:
-                        [cv2.circle(img, mesh_coord[i], 3, (0, 0, 255), -1) for i in self.leftPoint]
+                        [cv2.circle(img, smoothed[i], 3, (0, 0, 255), -1) for i in self.leftPoint]
 
-                    # 計算角度
+                    # 計算角度（使用平滑後的座標以減少抖動）
                     if side == 'right':
                         for i in self.rightAnglePoint:
                             test1, test2 = self.find_neighboring_elements(i, self.rightPoint)
-                            angle = self.calculate_angle(mesh_coord[test1], mesh_coord[i], mesh_coord[test2])
+                            angle = self.calculate_angle(smoothed[test1], smoothed[i], smoothed[test2])
                             self.datas[i].append(angle)
                     else:
                         for i in self.leftAnglePoint:
                             test1, test2 = self.find_neighboring_elements(i, self.leftPoint)
-                            angle = self.calculate_angle(mesh_coord[test1], mesh_coord[i], mesh_coord[test2])
+                            angle = self.calculate_angle(smoothed[test1], smoothed[i], smoothed[test2])
                             self.datas[i].append(angle)
 
                 # 每 10 秒統計一次角度
@@ -130,11 +196,23 @@ class BikeFIt():
                     self.start_time = time.time()  # 重置開始時間
                     self.clear_data()
 
+                # 顯示並寫入影片（若有指定）
                 cv2.imshow('Pose', img)
+                if writer is not None:
+                    # VideoWriter 需要 BGR 的 3 通道影像，我們目前的 img 就是 BGR
+                    writer.write(img)
 
-                if cv2.waitKey(1) == ord('q'):
+                # 檢查按鍵，按 q 退出
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord('q'):
+                    print("按下 q 鍵，正在退出...")
                     break
-                
+            
+            # 迴圈結束，釋放資源
+            if writer is not None:
+                writer.release()
+                print(f"影片已儲存")
+            cv2.destroyAllWindows()  # 關閉所有 OpenCV 視窗
 
     # 統計並顯示角度數據，並存入資料庫
     def record_angle_statistics(self, side):
@@ -225,16 +303,19 @@ if __name__ == '__main__':
     tmp = BikeFIt()
 
     # 開始處理影像並計算角度
-    cap = cv2.VideoCapture("openCVtest/IMG_6442.MOV")
+    cap = cv2.VideoCapture("C:\\Users\\User\\Desktop\\IMG_1891.MOV")
     fps = cap.get(cv2.CAP_PROP_FPS)
     print("Frames per second using video.get(cv2.CAP_PROP_FPS) : {0}".format(fps))
 
     # 呼叫 mpPose 來處理影像，儲存角度數據
-    tmp.mpPose(cap)
+    output_file = "output_processed.mp4"
+    print(f"處理影片中，按 q 鍵可提前結束。輸出檔案: {output_file}")
+    tmp.mpPose(cap, output_path=output_file)
 
-    # 釋放攝像頭資源並關閉視窗
+    # 釋放攝像頭資源
     cap.release()
-    cv2.destroyAllWindows()
     
     # 關閉數據庫連接
     tmp.close_database_connection()
+    
+    print("程式執行完成！")
