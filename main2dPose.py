@@ -22,6 +22,10 @@ class BikeFIt():
     datas = {11: [], 12: [], 13: [], 14: [], 23: [], 24: [], 25: [], 26: [], 27: [], 28: []}
     time_interval = 10  # 設置每10秒的時間間隔
     start_time = None
+    
+    # 數據庫連接變數
+    conn = None
+    cursor = None
 
     angleMap = {11: "肩", 12: "肩",
                 13: "手肘", 14: "手肘",
@@ -39,6 +43,21 @@ class BikeFIt():
 
     def __init__(self):
         self.start_time = time.time()  # 初始化開始時間
+        
+        # 初始化數據庫連接
+        try:
+            self.conn = mysql.connector.connect(
+                host='localhost',
+                user='your_username',
+                password='your_password',
+                database='your_database'
+            )
+            self.cursor = self.conn.cursor()
+            print("數據庫連接成功")
+        except mysql.connector.Error as err:
+            print(f"數據庫連接失敗: {err}")
+            self.conn = None
+            self.cursor = None
 
     # 找前後元素
     def find_neighboring_elements(self, number, elements_list):
@@ -132,11 +151,12 @@ class BikeFIt():
                     print(f'{self.angleMap[i]}\t最大角度:{max_angle}\t最小角度:{min_angle}\t平均角度:{avg_angle}')
 
                     # 將結果存入資料庫
-                    cursor.execute("""
-                        INSERT INTO video_result_data (timestamp, pose_id, up_date, average_date, down_date)
-                        VALUES (%s, %s, %s, %s, %s)
-                    """, (current_time, i, max_angle, avg_angle, min_angle))
-                    conn.commit()  # 提交更改
+                    if self.cursor and self.conn:
+                        self.cursor.execute("""
+                            INSERT INTO video_result_data (timestamp, pose_id, up_date, average_date, down_date)
+                            VALUES (%s, %s, %s, %s, %s)
+                        """, (current_time, i, max_angle, avg_angle, min_angle))
+                        self.conn.commit()  # 提交更改
 
                 else:
                     print(f'{self.angleMap[i]} 沒有足夠的數據來計算。')
@@ -151,11 +171,12 @@ class BikeFIt():
                     print(f'{self.angleMap[i]}\t最大角度:{max_angle}\t最小角度:{min_angle}\t平均角度:{avg_angle}')
 
                     # 將結果存入資料庫
-                    cursor.execute("""
-                        INSERT INTO video_result_data (timestamp, pose_id, up_date, average_date, down_date)
-                        VALUES (%s, %s, %s, %s, %s)
-                    """, (current_time, i, max_angle, avg_angle, min_angle))
-                    conn.commit()  # 提交更改
+                    if self.cursor and self.conn:
+                        self.cursor.execute("""
+                            INSERT INTO video_result_data (timestamp, pose_id, up_date, average_date, down_date)
+                            VALUES (%s, %s, %s, %s, %s)
+                        """, (current_time, i, max_angle, avg_angle, min_angle))
+                        self.conn.commit()  # 提交更改
 
                 else:
                     print(f'{self.angleMap[i]} 沒有足夠的數據來計算。')
@@ -164,6 +185,14 @@ class BikeFIt():
     def clear_data(self):
         for key in self.datas:
             self.datas[key].clear()
+    
+    # 關閉數據庫連接
+    def close_database_connection(self):
+        if self.cursor:
+            self.cursor.close()
+        if self.conn:
+            self.conn.close()
+        print("數據庫連接已關閉")
 
 class PostureCheck:
     def __init__(self):
@@ -206,3 +235,6 @@ if __name__ == '__main__':
     # 釋放攝像頭資源並關閉視窗
     cap.release()
     cv2.destroyAllWindows()
+    
+    # 關閉數據庫連接
+    tmp.close_database_connection()
