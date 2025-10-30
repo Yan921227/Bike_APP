@@ -368,7 +368,7 @@ if __name__ == '__main__':
     tmp = OpticalFlowBikeFit()  # 使用光流追蹤版本
 
     # 開始處理影像並計算角度
-    cap = cv2.VideoCapture("C:\\Users\\User\\Desktop\\IMG_1891.MOV")
+    cap = cv2.VideoCapture("C:\\Users\\User\\Desktop\\IMG_6442.MOV")
     fps = cap.get(cv2.CAP_PROP_FPS)
     print("Frames per second using video.get(cv2.CAP_PROP_FPS) : {0}".format(fps))
 
