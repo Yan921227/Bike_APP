@@ -3,6 +3,7 @@ import mediapipe as mp
 
 VIDEO_PATH = "C:\\Users\\User\\Desktop\\IMG_6442.MOV"   # ← 改成你的影片
 CSV_PATH   = "IMG_6442_angles.csv"
+OUTPUT_VIDEO_PATH = "IMG_6442_output.mp4"  # 輸出影片路徑
 
 # ====== 角度判定範圍設定 ======
 TOL = 2.0  # 單點目標的容差（度）
@@ -58,6 +59,18 @@ def pt(lm, i, w, h):
 
 cap = cv2.VideoCapture(VIDEO_PATH)
 pose = mp_pose.Pose(static_image_mode=False, model_complexity=1)
+
+# 取得影片屬性
+fps = int(cap.get(cv2.CAP_PROP_FPS))
+width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+# 設定影片輸出
+fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # 或使用 'avc1' 'H264' 等編碼
+out_video = cv2.VideoWriter(OUTPUT_VIDEO_PATH, fourcc, fps, (width, height))
+
+print(f"開始處理影片...")
+print(f"影片資訊: {width}x{height} @ {fps}fps")
 
 rows = []
 while True:
@@ -137,12 +150,19 @@ while True:
         )
         rows.append(out)
 
+    # 將處理後的畫面寫入輸出影片
+    out_video.write(frame)
+
     cv2.imshow("Angles", frame)
     if cv2.waitKey(1) & 0xFF == 27:  # ESC
         break
 
 cap.release()
+out_video.release()  # 釋放影片寫入器
 cv2.destroyAllWindows()
+
+print(f"\n處理完成!")
+print(f"輸出影片已儲存: {OUTPUT_VIDEO_PATH}")
 
 # 寫 CSV
 if rows:
